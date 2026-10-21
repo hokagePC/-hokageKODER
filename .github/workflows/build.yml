@@ -1,0 +1,345 @@
+
+name: Build NET CONTROL Mobile APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Create Android project
+        shell: bash
+        run: |
+          mkdir -p app/src/main/java/com/netcontrol/mobile
+
+          cat > settings.gradle <<'EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "NETCONTROL"
+          include(":app")
+          EOF
+
+          cat > build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application' version '8.7.3' apply false
+          }
+          EOF
+
+          cat > app/build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application'
+          }
+          android {
+              namespace 'com.netcontrol.mobile'
+              compileSdk 35
+              defaultConfig {
+                  applicationId 'com.netcontrol.mobile'
+                  minSdk 23
+                  targetSdk 28
+                  versionCode 1
+                  versionName '1.0'
+              }
+          }
+          EOF
+
+          cat > app/src/main/AndroidManifest.xml <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET"/>
+              <application
+                  android:theme="@android:style/Theme.Material.NoActionBar"
+                  android:label="NET CONTROL Mobile"
+                  android:usesCleartextTraffic="true">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN"/>
+                          <category android:name="android.intent.category.LAUNCHER"/>
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+          cat > app/src/main/java/com/netcontrol/mobile/MainActivity.java <<'EOF'
+          package com.netcontrol.mobile;
+
+          import android.app.Activity;
+          import android.os.Bundle;
+          import android.graphics.Color;
+          import android.graphics.Typeface;
+          import android.view.View;
+          import android.view.Gravity;
+          import android.widget.*;
+          import org.json.JSONObject;
+          import java.net.HttpURLConnection;
+          import java.net.URL;
+          import java.io.OutputStream;
+          import java.io.ByteArrayOutputStream;
+          import java.io.InputStream;
+          import java.nio.charset.StandardCharsets;
+          import java.util.concurrent.ExecutorService;
+          import java.util.concurrent.Executors;
+
+          public class MainActivity extends Activity {
+              final int bg = Color.rgb(18,18,22);
+              final int panel = Color.rgb(32,32,38);
+              final int orange = Color.rgb(255,145,40);
+              final ExecutorService executor = Executors.newSingleThreadExecutor();
+              EditText host, token, down, up, appName, appLimit;
+              TextView status;
+              boolean filter = false;
+
+              int dp(int n) {
+                  return (int)(n * getResources().getDisplayMetrics().density + 0.5f);
+              }
+
+              TextView label(String s, int size) {
+                  TextView v = new TextView(this);
+                  v.setText(s);
+                  v.setTextColor(Color.WHITE);
+                  v.setTextSize(size);
+                  v.setPadding(0, dp(8), 0, dp(8));
+                  return v;
+              }
+
+              EditText field(String hint, String value) {
+                  EditText e = new EditText(this);
+                  e.setSingleLine(true);
+                  e.setHint(hint);
+                  e.setText(value);
+                  e.setTextColor(Color.WHITE);
+                  e.setHintTextColor(Color.GRAY);
+                  e.setPadding(dp(12), dp(6), dp(12), dp(6));
+                  e.setBackgroundColor(panel);
+                  return e;
+              }
+
+              void add(LinearLayout root, View v) {
+                  LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(
+                      -1, -2);
+                  p.bottomMargin = dp(8);
+                  root.addView(v, p);
+              }
+
+              Button button(String text) {
+                  Button b = new Button(this);
+                  b.setText(text);
+                  b.setTextColor(Color.BLACK);
+                  b.setBackgroundTintList(
+                      android.content.res.ColorStateList.valueOf(orange));
+                  return b;
+              }
+
+              String base() {
+                  String s = host.getText().toString().trim();
+                  if (!s.startsWith("http://") && !s.startsWith("https://"))
+                      s = "http://" + s;
+                  while (s.endsWith("/"))
+                      s = s.substring(0, s.length() - 1);
+                  return s;
+              }
+
+              JSONObject request(String path, JSONObject body) throws Exception {
+                  URL url = new URL(base() + path);
+                  HttpURLConnection c = (HttpURLConnection) url.openConnection();
+                  c.setConnectTimeout(5000);
+                  c.setReadTimeout(5000);
+                  c.setRequestProperty("X-NC-Token",
+                      token.getText().toString().trim());
+                  if (body != null) {
+                      c.setRequestMethod("POST");
+                      c.setDoOutput(true);
+                      c.setRequestProperty("Content-Type", "application/json");
+                      byte[] bytes = body.toString().getBytes(StandardCharsets.UTF_8);
+                      try (OutputStream os = c.getOutputStream()) {
+                          os.write(bytes);
+                      }
+                  }
+                  int code = c.getResponseCode();
+                  InputStream is = code < 400 ? c.getInputStream() : c.getErrorStream();
+                  ByteArrayOutputStream out = new ByteArrayOutputStream();
+                  if (is != null) {
+                      byte[] buf = new byte[1024];
+                      int n;
+                      while ((n = is.read(buf)) != -1) out.write(buf, 0, n);
+                      is.close();
+                  }
+                  c.disconnect();
+                  String response = out.toString("UTF-8");
+                  if (code >= 400) throw new Exception("HTTP " + code + ": " + response);
+                  return new JSONObject(response);
+              }
+
+              void send(JSONObject body, String success) {
+                  status.setText("Подключение...");
+                  executor.execute(() -> {
+                      try {
+                          JSONObject result = request("/api/command", body);
+                          runOnUiThread(() -> status.setText(
+                              success + "\n" + result.optString("note", "Команда принята")));
+                      } catch (Exception ex) {
+                          runOnUiThread(() -> status.setText("Ошибка: " + ex.getMessage()));
+                      }
+                  });
+              }
+
+              @Override public void onCreate(Bundle b) {
+                  super.onCreate(b);
+                  getWindow().setStatusBarColor(bg);
+                  getWindow().setNavigationBarColor(bg);
+
+                  ScrollView scroll = new ScrollView(this);
+                  scroll.setBackgroundColor(bg);
+                  LinearLayout root = new LinearLayout(this);
+                  root.setOrientation(LinearLayout.VERTICAL);
+                  root.setPadding(dp(20), dp(22), dp(20), dp(24));
+                  scroll.addView(root);
+                  setContentView(scroll);
+
+                  TextView title = label("NET CONTROL", 28);
+                  title.setTextColor(orange);
+                  title.setTypeface(null, Typeface.BOLD);
+                  add(root, title);
+                  add(root, label("MOBILE  /  LAN CONTROL", 12));
+
+                  add(root, label("Подключение к ПК", 18));
+                  host = field("IP:порт", "192.168.0.101:8765");
+                  add(root, host);
+                  token = field("Токен из pairing_token.txt", "");
+                  add(root, token);
+
+                  Button connect = button("Проверить подключение");
+                  add(root, connect);
+                  connect.setOnClickListener(v -> {
+                      status.setText("Проверка...");
+                      executor.execute(() -> {
+                          try {
+                              JSONObject r = request("/api/state", null);
+                              runOnUiThread(() -> status.setText(
+                                  "Подключено. Состояние получено."));
+                          } catch (Exception ex) {
+                              runOnUiThread(() -> status.setText(
+                                  "Ошибка: " + ex.getMessage()));
+                          }
+                      });
+                  });
+
+                  add(root, label("Глобальные лимиты (Мбит/с)", 18));
+                  down = field("Download", "10");
+                  up = field("Upload", "5");
+                  add(root, down);
+                  add(root, up);
+
+                  Button limits = button("Сохранить общие лимиты");
+                  add(root, limits);
+                  limits.setOnClickListener(v -> {
+                      try {
+                          JSONObject j = new JSONObject();
+                          j.put("command", "global_limits");
+                          j.put("download_mbps",
+                              Double.parseDouble(down.getText().toString()));
+                          j.put("upload_mbps",
+                              Double.parseDouble(up.getText().toString()));
+                          send(j, "Лимиты сохранены на мосте.");
+                      } catch (Exception ex) {
+                          status.setText("Проверь значения лимитов.");
+                      }
+                  });
+
+                  add(root, label("Лимит приложения", 18));
+                  appName = field("Имя процесса, например chrome.exe", "");
+                  appLimit = field("Download, Мбит/с", "5");
+                  add(root, appName);
+                  add(root, appLimit);
+
+                  Button app = button("Сохранить лимит приложения");
+                  add(root, app);
+                  app.setOnClickListener(v -> {
+                      try {
+                          JSONObject j = new JSONObject();
+                          j.put("command", "app_limit");
+                          j.put("app", appName.getText().toString().trim());
+                          j.put("download_mbps",
+                              Double.parseDouble(appLimit.getText().toString()));
+                          send(j, "Лимит приложения сохранён на мосте.");
+                      } catch (Exception ex) {
+                          status.setText("Проверь имя приложения и лимит.");
+                      }
+                  });
+
+                  Button toggle = button("Включить фильтр");
+                  add(root, toggle);
+                  toggle.setOnClickListener(v -> {
+                      filter = !filter;
+                      try {
+                          JSONObject j = new JSONObject();
+                          j.put("command", "filter");
+                          j.put("enabled", filter);
+                          send(j, filter
+                              ? "Команда включения сохранена."
+                              : "Команда выключения сохранена.");
+                          toggle.setText(filter
+                              ? "Выключить фильтр" : "Включить фильтр");
+                      } catch (Exception ex) {
+                          status.setText("Не удалось создать команду.");
+                      }
+                  });
+
+                  status = label("Не подключено", 14);
+                  status.setTextColor(orange);
+                  add(root, status);
+                  add(root, label(
+                      "Примечание: текущий сервер только сохраняет настройки. " +
+                      "Для применения к реальному трафику нужна интеграция с NET CONTROL на ПК.",
+                      12));
+              }
+
+              @Override protected void onDestroy() {
+                  executor.shutdownNow();
+                  super.onDestroy();
+              }
+          }
+          EOF
+
+      - name: Build APK
+        run: gradle --no-daemon assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: NET-CONTROL-Mobile-APK
+          path: app/build/outputs/apk/debug/app-debug.apk
